@@ -301,6 +301,20 @@
   .flag-review{ color:var(--coral); font-weight:600; }
   .flag-ok{ color:var(--chalk-dim); }
 
+  table.answer-matrix{ border-collapse:collapse; font-size:12px; white-space:nowrap; }
+  table.answer-matrix th, table.answer-matrix td{
+    padding:7px 8px; border-bottom:1px solid var(--line); border-right:1px solid rgba(245,241,229,0.05);
+    text-align:center;
+  }
+  table.answer-matrix th:nth-child(1), table.answer-matrix td:nth-child(1),
+  table.answer-matrix th:nth-child(2), table.answer-matrix td:nth-child(2),
+  table.answer-matrix th:nth-child(3), table.answer-matrix td:nth-child(3){
+    text-align:left;
+  }
+  .ans-correct{ color:#7fbf7f; font-weight:600; }
+  .ans-incorrect{ color:var(--coral); font-weight:600; }
+  .ans-none{ color:var(--chalk-dim); }
+
   @media print{
     body *{ visibility:hidden; }
     #report-print-area, #report-print-area *{ visibility:visible; }
@@ -966,7 +980,8 @@ function lockOptions(selectedIndex){
   const isCorrect = selectedIndex === q.correct;
   if (isCorrect) score++;
   const timeUsed = Math.max(0, Math.min(currentQuestionTime, currentQuestionTime - timeLeft));
-  answerLog.push({ originalIndex: q.originalIndex, correct: isCorrect, timeUsed: timeUsed, timeLimit: currentQuestionTime });
+  const selectedText = selectedIndex >= 0 ? q.options[selectedIndex] : null;
+  answerLog.push({ originalIndex: q.originalIndex, correct: isCorrect, timeUsed: timeUsed, timeLimit: currentQuestionTime, selectedText: selectedText });
   btnNext.disabled = false;
 }
 
@@ -1564,6 +1579,40 @@ async function loadReport(){
   });
   html += `</tbody></table>`;
 
+  const letters = ['A','B','C','D','E','F','G','H'];
+  const answerMatrix = sortedRecords.map(r => {
+    const cells = [];
+    for (let qi = 0; qi < totalQuestions; qi++){
+      const ans = (r.answers || []).find(a => a.originalIndex === qi);
+      if (!ans || ans.selectedText === null || ans.selectedText === undefined){
+        cells.push({ text: '—', correct: null });
+      } else {
+        const origOptions = (teacherMeta.questions[qi] && teacherMeta.questions[qi].options) || [];
+        const letterIdx = origOptions.indexOf(ans.selectedText);
+        const letter = letterIdx >= 0 ? letters[letterIdx] : '?';
+        cells.push({ text: letter, correct: ans.correct });
+      }
+    }
+    return { name: r.name, grade: r.grade, section: r.section, cells };
+  });
+
+  html += `<div class="report-section-title">Student Answers per Item</div>`;
+  html += `<p class="field-hint" style="margin-bottom:8px;">Letters refer to each question's original answer order as you authored it (not the shuffled order each student saw). Green = correct, red = incorrect, — = no answer (timed out).</p>`;
+  html += `<div style="overflow-x:auto;"><table class="answer-matrix"><thead><tr><th>Name</th><th>Grade</th><th>Section</th>`;
+  for (let qi = 0; qi < totalQuestions; qi++){
+    html += `<th>Q${qi + 1}</th>`;
+  }
+  html += `</tr></thead><tbody>`;
+  answerMatrix.forEach(row => {
+    html += `<tr><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.grade)}</td><td>${escapeHtml(row.section)}</td>`;
+    row.cells.forEach(cell => {
+      const cls = cell.correct === true ? 'ans-correct' : (cell.correct === false ? 'ans-incorrect' : 'ans-none');
+      html += `<td class="${cls}">${escapeHtml(cell.text)}</td>`;
+    });
+    html += `</tr>`;
+  });
+  html += `</tbody></table></div>`;
+
   printArea.innerHTML = html;
 
   lastReportData = {
@@ -1574,7 +1623,9 @@ async function loadReport(){
     studentCount: records.length,
     avgPct, highPct, lowPct, passingPct, passCount, failCount,
     itemStats,
-    sortedRecords
+    sortedRecords,
+    answerMatrix,
+    totalQuestions
   };
 }
 
@@ -1628,6 +1679,16 @@ document.getElementById('btn-download-report-csv').addEventListener('click', () 
     const pct = r.total > 0 ? ((r.score / r.total) * 100).toFixed(0) : '0';
     const finished = (r.finishTime || r.timestamp) ? new Date(r.finishTime || r.timestamp).toLocaleString() : '';
     lines.push([r.name, r.grade, r.section, r.score, r.total, pct, finished].map(csvEscape).join(','));
+  });
+  lines.push('');
+
+  lines.push(['Student Answers per Item (letters = original authored order; correct answers marked with *)'].map(csvEscape).join(','));
+  const qHeaders = [];
+  for (let qi = 0; qi < d.totalQuestions; qi++) qHeaders.push('Q' + (qi + 1));
+  lines.push(['Name', 'Grade', 'Section'].concat(qHeaders).map(csvEscape).join(','));
+  d.answerMatrix.forEach(row => {
+    const cellVals = row.cells.map(c => c.correct === true ? (c.text + '*') : c.text);
+    lines.push([row.name, row.grade, row.section].concat(cellVals).map(csvEscape).join(','));
   });
 
   const csv = lines.join('\n');
