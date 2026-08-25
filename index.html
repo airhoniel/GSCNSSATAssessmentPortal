@@ -582,6 +582,7 @@ D) Saturn"></textarea>
       </label>
       <button class="btn ghost small" id="btn-refresh-report">Generate report</button>
       <button class="btn small" id="btn-download-report-csv">Download report (CSV)</button>
+      <button class="btn small" id="btn-download-deped-csv">Download DepEd Item Analysis (CSV)</button>
     </div>
     <div class="status-msg no-print" id="report-status"></div>
     <div id="report-print-area"></div>
@@ -1560,7 +1561,62 @@ async function loadReport(){
   });
   html += `</tbody></table>`;
 
-  const sortedRecords = records.slice().sort((a,b) => (b.score/b.total) - (a.score/a.total));
+  // ---- DepEd-style Item Analysis (Difficulty Index & Discrimination Index) ----
+  const sortedByScore = records.slice().sort((a,b) => (b.score/b.total) - (a.score/a.total));
+  const groupSize = Math.max(1, Math.round(sortedByScore.length * 0.27));
+  const depedReady = sortedByScore.length >= 4;
+  const upperGroup = depedReady ? sortedByScore.slice(0, groupSize) : [];
+  const lowerGroup = depedReady ? sortedByScore.slice(-groupSize) : [];
+
+  function classifyDifficulty(df){
+    if (df <= 0.20) return 'Very Difficult';
+    if (df <= 0.40) return 'Difficult';
+    if (df <= 0.60) return 'Moderately Difficult';
+    if (df <= 0.80) return 'Easy';
+    return 'Very Easy';
+  }
+  function classifyDiscrimination(di){
+    if (di < 0) return 'Poor (Reject/Revise)';
+    if (di < 0.20) return 'Poor';
+    if (di < 0.30) return 'Marginal';
+    if (di < 0.40) return 'Good';
+    return 'Excellent';
+  }
+
+  const depedAnalysis = teacherMeta.questions.map((q, idx) => {
+    if (!depedReady) return { idx, question: q.question, df: null, di: null, upperCorrect: 0, lowerCorrect: 0 };
+    const upperCorrect = upperGroup.filter(r => (r.answers || []).some(a => a.originalIndex === idx && a.correct)).length;
+    const lowerCorrect = lowerGroup.filter(r => (r.answers || []).some(a => a.originalIndex === idx && a.correct)).length;
+    const df = (upperCorrect + lowerCorrect) / (upperGroup.length + lowerGroup.length);
+    const di = (upperCorrect - lowerCorrect) / groupSize;
+    return { idx, question: q.question, df, di, upperCorrect, lowerCorrect };
+  });
+
+  html += `<div class="report-section-title">DepEd Item Analysis (Difficulty &amp; Discrimination Index)</div>`;
+  if (!depedReady){
+    html += `<p class="field-hint">Not enough student results yet for a reliable Upper/Lower 27% group split (need at least 4 results in the current filter). This section will populate once more students have taken the quiz.</p>`;
+  } else {
+    html += `<p class="field-hint" style="margin-bottom:8px;">Based on the Upper 27% and Lower 27% scoring groups (${groupSize} students each, out of ${sortedByScore.length} total in this filter).</p>`;
+    html += `<table class="item-analysis"><thead><tr>
+      <th>#</th><th>Question</th><th>Upper correct</th><th>Lower correct</th>
+      <th>Difficulty Index</th><th>Difficulty</th><th>Discrimination Index</th><th>Discrimination</th>
+    </tr></thead><tbody>`;
+    depedAnalysis.forEach(s => {
+      const diClass = s.di < 0.20 ? 'flag-review' : 'flag-ok';
+      html += `<tr>
+        <td>${s.idx + 1}</td>
+        <td>${escapeHtml(s.question)}</td>
+        <td>${s.upperCorrect} / ${groupSize}</td>
+        <td>${s.lowerCorrect} / ${groupSize}</td>
+        <td>${s.df.toFixed(2)}</td>
+        <td>${classifyDifficulty(s.df)}</td>
+        <td>${s.di.toFixed(2)}</td>
+        <td class="${diClass}">${classifyDiscrimination(s.di)}</td>
+      </tr>`;
+    });
+    html += `</tbody></table>`;
+  }
+  const sortedRecords = sortedByScore;
   html += `<div class="report-section-title">Student Scores</div>`;
   html += `<table class="student-scores"><thead><tr>
     <th>Name</th><th>Grade</th><th>Section</th><th>Score</th><th>%</th><th>Finished</th>
@@ -1625,7 +1681,8 @@ async function loadReport(){
     itemStats,
     sortedRecords,
     answerMatrix,
-    totalQuestions
+    totalQuestions,
+    depedReady, groupSize, depedAnalysis
   };
 }
 
@@ -1692,7 +1749,7 @@ document.getElementById('btn-download-report-csv').addEventListener('click', () 
   });
 
   const csv = lines.join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -1703,7 +1760,65 @@ document.getElementById('btn-download-report-csv').addEventListener('click', () 
   URL.revokeObjectURL(url);
 });
 
-let confirmDeleteKey = null;
+document.getElementById('btn-download-deped-csv').addEventListener('click', () => {
+  const statusEl = document.getElementById('report-status');
+  if (!lastReportData){
+    statusEl.textContent = "Click \"Generate report\" first.";
+    statusEl.className = "status-msg err";
+    return;
+  }
+  const d = lastReportData;
+  if (!d.depedReady){
+    statusEl.textContent = "Not enough student results yet for a reliable Upper/Lower 27% split (need at least 4 in this filter).";
+    statusEl.className = "status-msg err";
+    return;
+  }
+  const lines = [];
+  lines.push(['DepEd Item Analysis — Difficulty & Discrimination Index'].map(csvEscape).join(','));
+  lines.push(['Quiz title', d.quizTitle].map(csvEscape).join(','));
+  lines.push(['Class', d.classLabel].map(csvEscape).join(','));
+  lines.push(['Section filter', d.sectionFilter].map(csvEscape).join(','));
+  lines.push(['Generated', d.generatedAt].map(csvEscape).join(','));
+  lines.push(['Total students in filter', d.studentCount].map(csvEscape).join(','));
+  lines.push(['Upper/Lower group size (27% each)', d.groupSize].map(csvEscape).join(','));
+  lines.push('');
+
+  function classifyDifficultyCsv(df){
+    if (df <= 0.20) return 'Very Difficult';
+    if (df <= 0.40) return 'Difficult';
+    if (df <= 0.60) return 'Moderately Difficult';
+    if (df <= 0.80) return 'Easy';
+    return 'Very Easy';
+  }
+  function classifyDiscriminationCsv(di){
+    if (di < 0) return 'Poor (Reject/Revise)';
+    if (di < 0.20) return 'Poor';
+    if (di < 0.30) return 'Marginal';
+    if (di < 0.40) return 'Good';
+    return 'Excellent';
+  }
+
+  lines.push(['#', 'Question', 'Upper Correct', 'Lower Correct', 'Difficulty Index', 'Difficulty', 'Discrimination Index', 'Discrimination']
+    .map(csvEscape).join(','));
+  d.depedAnalysis.forEach(s => {
+    lines.push([
+      s.idx + 1, s.question, s.upperCorrect, s.lowerCorrect,
+      s.df.toFixed(2), classifyDifficultyCsv(s.df),
+      s.di.toFixed(2), classifyDiscriminationCsv(s.di)
+    ].map(csvEscape).join(','));
+  });
+
+  const csv = lines.join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'deped-item-analysis.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
 let confirmDeleteTimer = null;
 document.getElementById('results-table-wrap').addEventListener('click', async (e) => {
   const btn = e.target.closest('.btn-delete-row');
@@ -1749,7 +1864,7 @@ document.getElementById('btn-download-csv').addEventListener('click', () => {
     (r.finishTime || r.timestamp) ? new Date(r.finishTime || r.timestamp).toLocaleString() : ''
   ].map(csvEscape).join(','));
   const csv = [header.join(','), ...rows].join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
