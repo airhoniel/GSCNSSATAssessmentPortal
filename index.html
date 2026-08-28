@@ -402,7 +402,7 @@
       <li>Pick your <b>teacher &amp; subject</b>, enter your <b>full name</b>, and pick your <b>Grade &amp; Section</b> from the dropdown, then tap <b>Start Quiz</b>.</li>
       <li>You'll need the <b>class access code</b> given by your subject teacher to unlock the quiz — without it, you can't proceed.</li>
       <li>Each question has a countdown timer shown in the ring at the top right. Watch it — it doesn't pause.</li>
-      <li>Tap an answer choice to select it. Once you tap, your answer <b>locks in immediately</b> — you'll see if it was right or wrong, and you can't change it afterward.</li>
+      <li>Tap an answer choice to select it. Once you tap, your answer <b>locks in immediately</b> and you can't change it afterward — you won't see if it's right or wrong until you finish the whole quiz and see your final score.</li>
       <li>If the timer runs out before you select an answer, that question is automatically marked <b>wrong</b>, and the quiz moves on to the next question.</li>
       <li>You can only take each quiz <b>once</b>, so make sure you're ready before you tap Start Quiz.</li>
     </ul>
@@ -974,8 +974,6 @@ function lockOptions(selectedIndex){
   optionEls.forEach((el, i) => {
     el.disabled = true;
     el.style.cursor = 'default';
-    if (i === q.correct) el.classList.add('correct');
-    if (i === selectedIndex && selectedIndex !== q.correct) el.classList.add('incorrect');
     if (i === selectedIndex) el.classList.add('selected');
   });
   const isCorrect = selectedIndex === q.correct;
