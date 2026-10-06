@@ -391,9 +391,20 @@
   <h1 id="quiz-title-display">Select Summative Test</h1>
   <p class="sub" id="info-sub">Choose your teacher &amp; subject to begin.</p>
 
+  <label for="grade-level-filter">Grade Level</label>
+  <select id="grade-level-filter">
+    <option value="">Select your grade level</option>
+    <option>Grade 7</option>
+    <option>Grade 8</option>
+    <option>Grade 9</option>
+    <option>Grade 10</option>
+    <option>Grade 11</option>
+    <option>Grade 12</option>
+  </select>
+
   <label for="quiz-select">Teacher &amp; Subject</label>
-  <select id="quiz-select">
-    <option value="">Select teacher &amp; subject</option>
+  <select id="quiz-select" disabled>
+    <option value="">Select your grade level first</option>
   </select>
 
   <div class="instructions-box">
@@ -405,6 +416,7 @@
       <li>Tap an answer choice to select it. Once you tap, your answer <b>locks in immediately</b> and you can't change it afterward — you won't see if it's right or wrong until you finish the whole quiz and see your final score.</li>
       <li>If the timer runs out before you select an answer, that question is automatically marked <b>wrong</b>, and the quiz moves on to the next question.</li>
       <li>You can only take each quiz <b>once</b>, so make sure you're ready before you tap Start Quiz.</li>
+      <li>The quiz opens in <b>full-screen mode</b>, and switching tabs/apps or exiting full-screen during the quiz is recorded and visible to your teacher.</li>
     </ul>
   </div>
 
@@ -517,6 +529,18 @@
   </div>
 
   <div id="panel-setup">
+    <label for="grade-level-select">Grade Level</label>
+    <select id="grade-level-select">
+      <option value="">Select grade level</option>
+      <option>Grade 7</option>
+      <option>Grade 8</option>
+      <option>Grade 9</option>
+      <option>Grade 10</option>
+      <option>Grade 11</option>
+      <option>Grade 12</option>
+    </select>
+    <p class="field-hint">Students pick this grade level first — only classes tagged with it will appear in their list.</p>
+
     <label for="quiz-title-input">Quiz title (shown to students)</label>
     <input type="text" id="quiz-title-input" placeholder="e.g. Unit 3 Science Quiz">
 
@@ -640,6 +664,39 @@ function buildShuffledQuestions(questions){
 }
 let activeQuestions = [];
 let answerLog = [];
+let tabSwitchCount = 0;
+let quizInProgress = false;
+
+function requestQuizFullscreen(){
+  const el = document.documentElement;
+  try{
+    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+    if (req) req.call(el);
+  }catch(e){ /* full-screen may be unsupported or blocked — quiz still works without it */ }
+}
+function exitQuizFullscreen(){
+  try{
+    const isFs = document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
+    if (isFs){
+      const exit = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+      if (exit) exit.call(document);
+    }
+  }catch(e){ /* non-fatal */ }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (quizInProgress && document.hidden){
+    tabSwitchCount++;
+  }
+});
+['fullscreenchange', 'webkitfullscreenchange', 'msfullscreenchange'].forEach(evt => {
+  document.addEventListener(evt, () => {
+    const isFs = document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
+    if (quizInProgress && !isFs){
+      tabSwitchCount++;
+    }
+  });
+});
 let currentQuestionTime = 30;
 function escapeHtml(str){
   return String(str).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
@@ -653,6 +710,7 @@ function csvEscape(val){
 // Backend URLs (Google Apps Script Web Apps) — replaces Claude's window.storage
 const BACKEND_URL = 'https://script.google.com/macros/s/AKfycby3CEV05U9M84MemJ_8HKM5yRvocs2qzMOnOFnFWiOL4-6HNbhKHiAZbMgMSc1lolty/exec';
 const REPORT_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbzRPDXP4Ti4rMrwDdeO1GXiWgk3vYHGeOuVirLvFReuqIzGlP6EjS7Am7ABMm7oRoDMOw/exec';
+
 
 async function storeGet(key){
   try{
@@ -731,13 +789,14 @@ async function getTeacherList(){
   if (!raw) return [];
   try{ return JSON.parse(raw); }catch(e){ return []; }
 }
-async function addTeacherToRegistry(slug, label){
+async function addTeacherToRegistry(slug, label, gradeLevel){
   const list = await getTeacherList();
   const existing = list.find(t => t.slug === slug);
   if (existing){
     existing.label = label;
+    existing.gradeLevel = gradeLevel;
   } else {
-    list.push({ slug, label });
+    list.push({ slug, label, gradeLevel });
   }
   await storeSet(TEACHERS_KEY, JSON.stringify(list));
 }
@@ -746,21 +805,34 @@ let currentSlug = null;
 let currentTeacherLabel = '';
 let teacherMeta = null;
 
-async function populateQuizSelect(){
+async function populateQuizSelect(gradeLevel){
   const sel = document.getElementById('quiz-select');
-  const list = await getTeacherList();
-  if (list.length === 0){
-    document.getElementById('info-sub').textContent = "No quizzes have been published yet. Please check back later.";
-    sel.classList.add('hidden');
+
+  if (!gradeLevel){
+    sel.innerHTML = '<option value="">Select your grade level first</option>';
+    sel.disabled = true;
     return;
   }
+
+  const list = await getTeacherList();
+  const filtered = list.filter(t => t.gradeLevel === gradeLevel);
+
+  if (filtered.length === 0){
+    sel.innerHTML = '<option value="">No classes published yet for this grade</option>';
+    sel.disabled = true;
+    document.getElementById('info-sub').textContent = `No quizzes have been published for ${gradeLevel} yet. Please check back later.`;
+    return;
+  }
+
+  sel.disabled = false;
   sel.innerHTML = '<option value="">Select teacher &amp; subject</option>';
-  list.forEach(t => {
+  filtered.forEach(t => {
     const opt = document.createElement('option');
     opt.value = t.slug;
     opt.textContent = t.label;
     sel.appendChild(opt);
   });
+  document.getElementById('info-sub').textContent = "Choose your teacher & subject to begin.";
 }
 
 async function loadStudentQuiz(slug){
@@ -848,8 +920,12 @@ function checkAccessCode(){
   }
 }
 
-populateQuizSelect();
+populateQuizSelect('');
 document.getElementById('quiz-select').addEventListener('change', (e) => loadStudentQuiz(e.target.value));
+document.getElementById('grade-level-filter').addEventListener('change', async (e) => {
+  await loadStudentQuiz(''); // reset any previously chosen class/quiz state
+  await populateQuizSelect(e.target.value);
+});
 
 const nameInput = document.getElementById('stu-name');
 const sectionSelect = document.getElementById('stu-section');
@@ -896,6 +972,9 @@ btnStart.addEventListener('click', async () => {
 
   activeQuestions = buildShuffledQuestions(quizMeta.questions);
   answerLog = [];
+  tabSwitchCount = 0;
+  quizInProgress = true;
+  requestQuizFullscreen();
 
   document.getElementById('screen-info').classList.add('hidden');
   document.getElementById('screen-quiz').classList.remove('hidden');
@@ -999,6 +1078,8 @@ btnNext.addEventListener('click', () => {
 });
 
 async function finishQuiz(){
+  quizInProgress = false;
+  exitQuizFullscreen();
   progressFill.style.width = `100%`;
   document.getElementById('screen-quiz').classList.add('hidden');
   document.getElementById('screen-results').classList.remove('hidden');
@@ -1024,7 +1105,8 @@ async function finishQuiz(){
     startTime: student.startTime,
     finishTime: finishTime,
     timestamp: finishTime,
-    answers: answerLog
+    answers: answerLog,
+    leftCount: tabSwitchCount
   };
   const ok = await storeSet(resultKey(currentSlug, key), JSON.stringify(record));
   if (ok){
@@ -1158,6 +1240,7 @@ async function openTeacherPanel(){
       const meta = JSON.parse(raw);
       teacherMeta = meta;
       document.getElementById('quiz-title-input').value = meta.title || "";
+      document.getElementById('grade-level-select').value = meta.gradeLevel || "";
       document.getElementById('time-per-q').value = meta.timePerQuestion || 30;
       document.getElementById('access-code-input').value = meta.accessCode || "";
       document.getElementById('sections-input').value = (meta.sections || []).join('\n');
@@ -1170,6 +1253,7 @@ async function openTeacherPanel(){
     }catch(e){}
   } else {
     document.getElementById('quiz-title-input').value = "";
+    document.getElementById('grade-level-select').value = "";
     document.getElementById('time-per-q').value = 30;
     document.getElementById('access-code-input').value = "";
     document.getElementById('sections-input').value = "";
@@ -1334,6 +1418,12 @@ document.getElementById('preview-wrap').addEventListener('click', (e) => {
 
 document.getElementById('btn-save-quiz').addEventListener('click', async () => {
   const statusEl = document.getElementById('setup-status');
+  const gradeLevel = document.getElementById('grade-level-select').value;
+  if (!gradeLevel){
+    statusEl.textContent = "Please select a Grade Level before saving — this is what lets students filter to their own grade.";
+    statusEl.className = "status-msg err";
+    return;
+  }
   const text = document.getElementById('questions-input').value;
   const { questions, warnings } = parseQuestions(text);
   if (questions.length === 0){
@@ -1349,6 +1439,7 @@ document.getElementById('btn-save-quiz').addEventListener('click', async () => {
   const sections = sectionsText.split('\n').map(s => s.trim()).filter(Boolean);
   const meta = {
     title: document.getElementById('quiz-title-input').value.trim() || "Quiz Sign-In",
+    gradeLevel: gradeLevel,
     timePerQuestion: parseInt(document.getElementById('time-per-q').value, 10) || 30,
     accessCode: document.getElementById('access-code-input').value.trim(),
     sections: sections,
@@ -1359,7 +1450,7 @@ document.getElementById('btn-save-quiz').addEventListener('click', async () => {
   statusEl.textContent = "Saving...";
   statusEl.className = "status-msg info";
   const ok = await storeSet(metaKey(currentSlug), JSON.stringify(meta));
-  if (ok) await addTeacherToRegistry(currentSlug, currentTeacherLabel);
+  if (ok) await addTeacherToRegistry(currentSlug, currentTeacherLabel, gradeLevel);
   if (ok){
     statusEl.textContent = `Saved ${questions.length} question(s)${warnings.length ? ' (with warnings above)' : ''}. Students will see this the next time they open the page.`;
     statusEl.className = "status-msg ok";
@@ -1412,16 +1503,21 @@ async function loadDashboard(){
   }
 
   let html = `<table class="results-table"><thead><tr>
-    <th>Name</th><th>Grade</th><th>Section</th><th>Score</th><th>Started</th><th>Finished</th><th></th>
+    <th>Name</th><th>Grade</th><th>Section</th><th>Score</th><th>Left quiz</th><th>Started</th><th>Finished</th><th></th>
   </tr></thead><tbody>`;
   records.forEach(r => {
     const started = r.startTime ? new Date(r.startTime).toLocaleString() : '';
     const finished = (r.finishTime || r.timestamp) ? new Date(r.finishTime || r.timestamp).toLocaleString() : '';
+    const left = r.leftCount || 0;
+    const leftCell = left > 0
+      ? `<span class="flag-review">⚠ ${left}x</span>`
+      : `<span class="flag-ok">—</span>`;
     html += `<tr>
       <td>${escapeHtml(r.name)}</td>
       <td>${escapeHtml(r.grade)}</td>
       <td>${escapeHtml(r.section)}</td>
       <td>${r.score}/${r.total}</td>
+      <td>${leftCell}</td>
       <td>${escapeHtml(started)}</td>
       <td>${escapeHtml(finished)}</td>
       <td><button class="btn-delete-row" data-key="${escapeHtml(r._key)}" title="Remove this result">&#10005;</button></td>
@@ -1855,9 +1951,9 @@ document.getElementById('btn-download-csv').addEventListener('click', () => {
     statusEl.className = "status-msg err";
     return;
   }
-  const header = ['Full Name','Grade','Section','Score','Total','Started At','Finished At'];
+  const header = ['Full Name','Grade','Section','Score','Total','Left Quiz (times)','Started At','Finished At'];
   const rows = lastResults.map(r => [
-    r.name, r.grade, r.section, r.score, r.total,
+    r.name, r.grade, r.section, r.score, r.total, r.leftCount || 0,
     r.startTime ? new Date(r.startTime).toLocaleString() : '',
     (r.finishTime || r.timestamp) ? new Date(r.finishTime || r.timestamp).toLocaleString() : ''
   ].map(csvEscape).join(','));
