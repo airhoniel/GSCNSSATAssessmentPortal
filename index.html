@@ -140,6 +140,14 @@
     height:100%; background: var(--gold); border-radius:4px;
     transition: width .3s ease;
   }
+  .progress-dots{ display:flex; flex-wrap:wrap; gap:5px; margin-top:9px; }
+  .progress-dot{
+    width:9px; height:9px; border-radius:50%;
+    background: rgba(245,241,229,0.15); flex-shrink:0;
+    transition: background .2s ease, transform .2s ease;
+  }
+  .progress-dot.done{ background: var(--gold); }
+  .progress-dot.current{ background: var(--gold); transform:scale(1.35); }
   .timer-ring{ position:relative; width:58px; height:58px; flex-shrink:0; margin-left:16px; }
   .timer-ring svg{ transform: rotate(-90deg); }
   .timer-ring circle{ fill:none; stroke-width:5; }
@@ -182,6 +190,12 @@
 
   .score-ring-wrap{ display:flex; justify-content:center; margin:14px 0 22px; }
   .score-big{ font-family:'Fredoka', sans-serif; font-size:52px; font-weight:700; color:var(--gold); text-align:center; }
+  @keyframes scorePop{
+    0%{ transform:scale(0.7); opacity:0; }
+    60%{ transform:scale(1.08); opacity:1; }
+    100%{ transform:scale(1); }
+  }
+  .score-pop{ animation: scorePop 0.45s ease; }
   .score-sub{ text-align:center; color:var(--chalk-dim); font-size:14px; margin-top:2px; }
   .result-row{
     display:flex; justify-content:space-between;
@@ -273,6 +287,12 @@
   .qprev-img-status{ font-size:12px; color:var(--chalk-dim); }
 
   .hidden{ display:none !important; }
+
+  @keyframes fadeSlideIn{
+    from{ opacity:0; transform:translateY(10px); }
+    to{ opacity:1; transform:translateY(0); }
+  }
+  .fade-in{ animation: fadeSlideIn 0.35s ease; }
 
   .report-print-header{
     display:flex; align-items:center; gap:14px; margin-bottom:18px;
@@ -448,6 +468,7 @@
     <div style="flex:1;">
       <div class="progress-label" id="progress-label">Question 1 of 5</div>
       <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      <div class="progress-dots" id="progress-dots"></div>
     </div>
     <div class="timer-ring" id="timer-ring">
       <svg width="58" height="58">
@@ -698,6 +719,22 @@ document.addEventListener('visibilitychange', () => {
   });
 });
 let currentQuestionTime = 30;
+const SCREEN_IDS = ['screen-info', 'screen-quiz', 'screen-results', 'screen-teacher'];
+function showScreen(id){
+  SCREEN_IDS.forEach(sid => {
+    const el = document.getElementById(sid);
+    if (!el) return;
+    if (sid === id){
+      el.classList.remove('hidden');
+      el.classList.remove('fade-in');
+      void el.offsetWidth; // restart animation
+      el.classList.add('fade-in');
+    } else {
+      el.classList.add('hidden');
+    }
+  });
+}
+
 function escapeHtml(str){
   return String(str).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
 }
@@ -710,7 +747,6 @@ function csvEscape(val){
 // Backend URLs (Google Apps Script Web Apps) — replaces Claude's window.storage
 const BACKEND_URL = 'https://script.google.com/macros/s/AKfycby3CEV05U9M84MemJ_8HKM5yRvocs2qzMOnOFnFWiOL4-6HNbhKHiAZbMgMSc1lolty/exec';
 const REPORT_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbzRPDXP4Ti4rMrwDdeO1GXiWgk3vYHGeOuVirLvFReuqIzGlP6EjS7Am7ABMm7oRoDMOw/exec';
-
 
 async function storeGet(key){
   try{
@@ -805,6 +841,22 @@ let currentSlug = null;
 let currentTeacherLabel = '';
 let teacherMeta = null;
 
+function getSubjectIcon(label){
+  const s = label.toLowerCase();
+  if (/\bmath|algebra|geometry|calculus|statistics\b/.test(s)) return '📐';
+  if (/\bscience|physics|chemistry|biology|earth science\b/.test(s)) return '🔬';
+  if (/\benglish|reading|literature\b/.test(s)) return '📖';
+  if (/\bfilipino\b/.test(s)) return '🇵🇭';
+  if (/\bmapeh|music|art[s]?\b/.test(s)) return '🎨';
+  if (/\b(p\.?e\.?|physical education|sports)\b/.test(s)) return '🏃';
+  if (/\bvalues|esp|character\b/.test(s)) return '🤝';
+  if (/\bcomputer|ict|tle|technology|arts and trades\b/.test(s)) return '🛠️';
+  if (/\bhistory|araling panlipunan|\bap\b|social studies\b/.test(s)) return '🌏';
+  if (/\breligion|values education\b/.test(s)) return '🙏';
+  if (/\bresearch\b/.test(s)) return '🔎';
+  return '📘';
+}
+
 async function populateQuizSelect(gradeLevel){
   const sel = document.getElementById('quiz-select');
 
@@ -813,6 +865,10 @@ async function populateQuizSelect(gradeLevel){
     sel.disabled = true;
     return;
   }
+
+  sel.innerHTML = '<option value="">Loading classes...</option>';
+  sel.disabled = true;
+  document.getElementById('info-sub').textContent = `Loading classes for ${gradeLevel}...`;
 
   const list = await getTeacherList();
   const filtered = list.filter(t => t.gradeLevel === gradeLevel);
@@ -829,7 +885,7 @@ async function populateQuizSelect(gradeLevel){
   filtered.forEach(t => {
     const opt = document.createElement('option');
     opt.value = t.slug;
-    opt.textContent = t.label;
+    opt.textContent = `${getSubjectIcon(t.label)} ${t.label}`;
     sel.appendChild(opt);
   });
   document.getElementById('info-sub').textContent = "Choose your teacher & subject to begin.";
@@ -853,6 +909,9 @@ async function loadStudentQuiz(slug){
     document.getElementById('info-sub').textContent = "Choose your teacher & subject to begin.";
     return;
   }
+
+  document.getElementById('quiz-title-display').textContent = "Loading...";
+  document.getElementById('info-sub').textContent = "Loading this class's quiz, please wait...";
 
   const raw = await storeGet(metaKey(slug));
   if (!raw){
@@ -976,8 +1035,7 @@ btnStart.addEventListener('click', async () => {
   quizInProgress = true;
   requestQuizFullscreen();
 
-  document.getElementById('screen-info').classList.add('hidden');
-  document.getElementById('screen-quiz').classList.remove('hidden');
+  showScreen('screen-quiz');
   showQuestion(0);
 });
 
@@ -1003,6 +1061,20 @@ function showQuestion(index){
   questionText.textContent = q.question;
   progressLabel.textContent = `Question ${index + 1} of ${activeQuestions.length}`;
   progressFill.style.width = `${(index / activeQuestions.length) * 100}%`;
+
+  const dotsWrap = document.getElementById('progress-dots');
+  if (activeQuestions.length <= 25){
+    let dotsHtml = '';
+    for (let i = 0; i < activeQuestions.length; i++){
+      const cls = i < index ? 'done' : (i === index ? 'current' : '');
+      dotsHtml += `<div class="progress-dot ${cls}"></div>`;
+    }
+    dotsWrap.innerHTML = dotsHtml;
+    dotsWrap.classList.remove('hidden');
+  } else {
+    dotsWrap.innerHTML = '';
+    dotsWrap.classList.add('hidden');
+  }
 
   const imgWrap = document.getElementById('question-image-wrap');
   if (q.image){
@@ -1077,14 +1149,31 @@ btnNext.addEventListener('click', () => {
   else finishQuiz();
 });
 
+function animateScoreReveal(finalScore, total){
+  const el = document.getElementById('score-big');
+  el.textContent = `0/${total}`;
+  el.classList.remove('score-pop');
+  void el.offsetWidth;
+  el.classList.add('score-pop');
+  if (finalScore <= 0){ el.textContent = `0/${total}`; return; }
+  const duration = Math.min(900, 150 + finalScore * 60);
+  const steps = finalScore;
+  const stepTime = duration / steps;
+  let current = 0;
+  const timer = setInterval(() => {
+    current++;
+    el.textContent = `${current}/${total}`;
+    if (current >= finalScore) clearInterval(timer);
+  }, stepTime);
+}
+
 async function finishQuiz(){
   quizInProgress = false;
   exitQuizFullscreen();
   progressFill.style.width = `100%`;
-  document.getElementById('screen-quiz').classList.add('hidden');
-  document.getElementById('screen-results').classList.remove('hidden');
+  showScreen('screen-results');
 
-  document.getElementById('score-big').textContent = `${score}/${activeQuestions.length}`;
+  animateScoreReveal(score, activeQuestions.length);
   document.getElementById('res-name').textContent = student.name;
   document.getElementById('res-grade').textContent = `${student.grade} - ${student.section}`;
   document.getElementById('res-score').textContent = `${score} out of ${activeQuestions.length}`;
@@ -1225,10 +1314,7 @@ const screenTeacher = document.getElementById('screen-teacher');
 const screenInfo = document.getElementById('screen-info');
 
 async function openTeacherPanel(){
-  screenInfo.classList.add('hidden');
-  document.getElementById('screen-quiz').classList.add('hidden');
-  document.getElementById('screen-results').classList.add('hidden');
-  screenTeacher.classList.remove('hidden');
+  showScreen('screen-teacher');
   document.getElementById('teacher-class-label').textContent = currentTeacherLabel;
 
   const raw = await storeGet(metaKey(currentSlug));
