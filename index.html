@@ -433,7 +433,7 @@
       <li>Pick your <b>teacher &amp; subject</b>, enter your <b>full name</b>, and pick your <b>Grade &amp; Section</b> from the dropdown, then tap <b>Start Quiz</b>.</li>
       <li>You'll need the <b>class access code</b> given by your subject teacher to unlock the quiz — without it, you can't proceed.</li>
       <li>Each question has a countdown timer shown in the ring at the top right. Watch it — it doesn't pause.</li>
-      <li>Tap an answer choice to select it. Once you tap, your answer <b>locks in immediately</b> and you can't change it afterward — you won't see if it's right or wrong until you finish the whole quiz and see your final score.</li>
+      <li>Tap an answer choice to select it — you can change your mind and tap a different choice as many times as you like. Your answer only becomes final when you tap <b>Next</b> or the timer runs out. You won't see if it's right or wrong until you finish the whole quiz and see your final score.</li>
       <li>If the timer runs out before you select an answer, that question is automatically marked <b>wrong</b>, and the quiz moves on to the next question.</li>
       <li>You can only take each quiz <b>once</b>, so make sure you're ready before you tap Start Quiz.</li>
       <li>The quiz opens in <b>full-screen mode</b>, and switching tabs/apps or exiting full-screen during the quiz is recorded and visible to your teacher.</li>
@@ -495,6 +495,7 @@
     </div>
   </div>
   <div class="result-row"><span>Full name</span><span id="res-name">—</span></div>
+  <div class="result-row"><span>Subject</span><span id="res-subject">—</span></div>
   <div class="result-row"><span>Grade &amp; Section</span><span id="res-grade">—</span></div>
   <div class="result-row"><span>Score</span><span id="res-score">—</span></div>
   <div class="status-msg" id="save-status"></div>
@@ -649,6 +650,7 @@ let score = 0;
 let timerInterval = null;
 let timeLeft = 30;
 let answered = false;
+let selectedOptionIndex = -1;
 let TIME_PER_QUESTION = 30;
 
 const RADIUS = 24;
@@ -745,7 +747,7 @@ function csvEscape(val){
 }
 
 // Backend URLs (Google Apps Script Web Apps) — replaces Claude's window.storage
-const BACKEND_URL = 'https://script.google.com/macros/s/AKfycby3CEV05U9M84MemJ_8HKM5yRvocs2qzMOnOFnFWiOL4-6HNbhKHiAZbMgMSc1lolty/exec';
+const const BACKEND_URL = 'https://script.google.com/macros/s/AKfycby3CEV05U9M84MemJ_8HKM5yRvocs2qzMOnOFnFWiOL4-6HNbhKHiAZbMgMSc1lolty/exec';
 const REPORT_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbzRPDXP4Ti4rMrwDdeO1GXiWgk3vYHGeOuVirLvFReuqIzGlP6EjS7Am7ABMm7oRoDMOw/exec';
 
 async function storeGet(key){
@@ -801,7 +803,7 @@ async function sendResultToReportSheet(record){
     await fetch(REPORT_BACKEND_URL, {
       method: 'POST',
       body: JSON.stringify({
-        className: currentTeacherLabel,
+        className: currentQuizLabel || currentTeacherLabel,
         name: record.name,
         grade: record.grade,
         section: record.section,
@@ -857,6 +859,9 @@ function getSubjectIcon(label){
   return '📘';
 }
 
+let currentGradeClassList = [];
+let currentQuizLabel = '';
+
 async function populateQuizSelect(gradeLevel){
   const sel = document.getElementById('quiz-select');
 
@@ -879,6 +884,8 @@ async function populateQuizSelect(gradeLevel){
     document.getElementById('info-sub').textContent = `No quizzes have been published for ${gradeLevel} yet. Please check back later.`;
     return;
   }
+
+  currentGradeClassList = filtered;
 
   sel.disabled = false;
   sel.innerHTML = '<option value="">Select teacher &amp; subject</option>';
@@ -905,10 +912,14 @@ async function loadStudentQuiz(slug){
   quizMeta = null;
 
   if (!slug){
+    currentQuizLabel = '';
     document.getElementById('quiz-title-display').textContent = "Select Summative Test";
     document.getElementById('info-sub').textContent = "Choose your teacher & subject to begin.";
     return;
   }
+
+  const matchedClass = currentGradeClassList.find(t => t.slug === slug);
+  currentQuizLabel = matchedClass ? matchedClass.label : '';
 
   document.getElementById('quiz-title-display').textContent = "Loading...";
   document.getElementById('info-sub').textContent = "Loading this class's quiz, please wait...";
@@ -1052,6 +1063,7 @@ timerFg.style.strokeDasharray = CIRC;
 function showQuestion(index){
   currentIndex = index;
   answered = false;
+  selectedOptionIndex = -1;
   const q = activeQuestions[index];
   const questionTime = q.timeLimit || TIME_PER_QUESTION;
   currentQuestionTime = questionTime;
@@ -1106,7 +1118,7 @@ function showQuestion(index){
     if (timeLeft <= 10) timerRing.classList.add('low');
     if (timeLeft <= 0){
       clearInterval(timerInterval);
-      if (!answered) lockOptions(-1);
+      finalizeAnswer();
       goNextAfterDelay();
     }
   }, 1000);
@@ -1114,25 +1126,28 @@ function showQuestion(index){
 
 function selectOption(i){
   if (answered) return;
-  answered = true;
-  clearInterval(timerInterval);
-  lockOptions(i);
+  selectedOptionIndex = i;
+  const optionEls = optionsWrap.querySelectorAll('.option');
+  optionEls.forEach((el, idx) => {
+    el.classList.toggle('selected', idx === i);
+  });
+  btnNext.disabled = false;
 }
 
-function lockOptions(selectedIndex){
+function finalizeAnswer(){
+  if (answered) return;
+  answered = true;
   const q = activeQuestions[currentIndex];
   const optionEls = optionsWrap.querySelectorAll('.option');
-  optionEls.forEach((el, i) => {
+  optionEls.forEach(el => {
     el.disabled = true;
     el.style.cursor = 'default';
-    if (i === selectedIndex) el.classList.add('selected');
   });
-  const isCorrect = selectedIndex === q.correct;
+  const isCorrect = selectedOptionIndex === q.correct;
   if (isCorrect) score++;
   const timeUsed = Math.max(0, Math.min(currentQuestionTime, currentQuestionTime - timeLeft));
-  const selectedText = selectedIndex >= 0 ? q.options[selectedIndex] : null;
+  const selectedText = selectedOptionIndex >= 0 ? q.options[selectedOptionIndex] : null;
   answerLog.push({ originalIndex: q.originalIndex, correct: isCorrect, timeUsed: timeUsed, timeLimit: currentQuestionTime, selectedText: selectedText });
-  btnNext.disabled = false;
 }
 
 function goNextAfterDelay(){
@@ -1144,7 +1159,7 @@ function goNextAfterDelay(){
 
 btnNext.addEventListener('click', () => {
   clearInterval(timerInterval);
-  if (!answered) lockOptions(-1);
+  finalizeAnswer();
   if (currentIndex + 1 < activeQuestions.length) showQuestion(currentIndex + 1);
   else finishQuiz();
 });
@@ -1175,6 +1190,7 @@ async function finishQuiz(){
 
   animateScoreReveal(score, activeQuestions.length);
   document.getElementById('res-name').textContent = student.name;
+  document.getElementById('res-subject').textContent = currentQuizLabel || (quizMeta && quizMeta.title) || '—';
   document.getElementById('res-grade').textContent = `${student.grade} - ${student.section}`;
   document.getElementById('res-score').textContent = `${score} out of ${activeQuestions.length}`;
 
