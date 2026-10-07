@@ -1002,9 +1002,24 @@ const sectionSelect = document.getElementById('stu-section');
 const btnStart = document.getElementById('btn-start');
 const entryStatus = document.getElementById('entry-status');
 
+let dupCheckCache = { key: null, promise: null };
+let dupCheckTimer = null;
+
+function prefetchDuplicateCheck(){
+  if (!currentSlug || !quizMeta) return;
+  const name = nameInput.value.trim();
+  const combo = sectionSelect.value;
+  if (name.length < 2 || !combo) return;
+  const fullKey = resultKey(currentSlug, studentKey(name, combo));
+  if (dupCheckCache.key === fullKey) return;
+  dupCheckCache = { key: fullKey, promise: storeGet(fullKey) };
+}
+
 function validateInfo(){
   const ok = nameInput.value.trim().length > 1 && sectionSelect.value.trim().length > 0;
   btnStart.disabled = !ok;
+  clearTimeout(dupCheckTimer);
+  if (ok) dupCheckTimer = setTimeout(prefetchDuplicateCheck, 600);
 }
 [nameInput, sectionSelect].forEach(el => el.addEventListener('input', validateInfo));
 sectionSelect.addEventListener('change', validateInfo);
@@ -1013,8 +1028,6 @@ btnStart.addEventListener('click', async () => {
   if (!quizMeta || !currentSlug) return;
   if (quizMeta.accessCode && !codeVerified) return;
   btnStart.disabled = true;
-  entryStatus.textContent = "Checking...";
-  entryStatus.className = "status-msg info";
 
   const name = nameInput.value.trim();
   const sectionCombo = sectionSelect.value;
@@ -1026,8 +1039,24 @@ btnStart.addEventListener('click', async () => {
     return;
   }
 
-  const existing = await storeGet(resultKey(currentSlug, key));
+  // Request full-screen RIGHT NOW, while the tap is still a fresh user gesture.
+  // (Browsers refuse the request if it's made after a multi-second network wait.)
+  requestQuizFullscreen();
+
+  entryStatus.textContent = "Getting your quiz ready...";
+  entryStatus.className = "status-msg info";
+
+  const fullKey = resultKey(currentSlug, key);
+  const pending = (dupCheckCache.key === fullKey && dupCheckCache.promise)
+    ? dupCheckCache.promise
+    : storeGet(fullKey);
+  let existing = await pending;
   if (existing){
+    // re-verify once in case a teacher removed the old result since the early check
+    existing = await storeGet(fullKey);
+  }
+  if (existing){
+    exitQuizFullscreen();
     entryStatus.textContent = "You've already taken this quiz. If this looks wrong, tell your teacher.";
     entryStatus.className = "status-msg err";
     return;
@@ -1044,7 +1073,6 @@ btnStart.addEventListener('click', async () => {
   answerLog = [];
   tabSwitchCount = 0;
   quizInProgress = true;
-  requestQuizFullscreen();
 
   showScreen('screen-quiz');
   showQuestion(0);
